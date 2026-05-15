@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "wsboxing").lstrip("@")
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 
 # Crypto wallet addresses — set in .env
 WALLETS = {
@@ -69,21 +70,15 @@ def crypto_keyboard():
     return InlineKeyboardMarkup(buttons)
 
 
-async def get_admin_chat_id(app: Application) -> int | None:
-    """Resolve @wsboxing's chat_id from bot data cache (populated on first /start)."""
-    return app.bot_data.get("admin_chat_id")
-
-
 async def notify_admin(app: Application, text: str, photo_file_id: str | None = None):
-    admin_id = await get_admin_chat_id(app)
-    if not admin_id:
-        logger.warning("Admin chat_id not cached yet — admin has not /start-ed the bot.")
+    if not ADMIN_CHAT_ID:
+        logger.warning("ADMIN_CHAT_ID not set in environment — cannot notify admin.")
         return
     try:
         if photo_file_id:
-            await app.bot.send_photo(chat_id=admin_id, photo=photo_file_id, caption=text)
+            await app.bot.send_photo(chat_id=ADMIN_CHAT_ID, photo=photo_file_id, caption=text, parse_mode="Markdown")
         else:
-            await app.bot.send_message(chat_id=admin_id, text=text)
+            await app.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"Failed to notify admin: {e}")
 
@@ -95,11 +90,6 @@ async def notify_admin(app: Application, text: str, photo_file_id: str | None = 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await db.get_or_create_user(user.id, user.username or "", user.first_name or "")
-
-    # Cache admin chat_id when they start the bot
-    if user.username and user.username.lower() == ADMIN_USERNAME.lower():
-        context.application.bot_data["admin_chat_id"] = user.id
-        logger.info(f"Admin @{ADMIN_USERNAME} cached: {user.id}")
 
     balance = await db.get_balance(user.id)
     await update.message.reply_text(
@@ -346,7 +336,9 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def admin_only(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        if not user or user.username.lower() != ADMIN_USERNAME.lower():
+        username = (user.username or "").lower()
+        is_admin = username == ADMIN_USERNAME.lower() or (ADMIN_CHAT_ID and user.id == ADMIN_CHAT_ID)
+        if not user or not is_admin:
             await update.message.reply_text("⛔ Admin only.")
             return
         return await func(update, context)
